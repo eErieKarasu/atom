@@ -12,6 +12,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, DistributedSampler
 from contextlib import nullcontext
+from tqdm import tqdm
 
 from transformers import AutoTokenizer
 
@@ -34,7 +35,13 @@ def get_lr(current_step, total_steps, lr):
 def train_epoch(epoch, wandb):
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
-    for step, (X, Y, loss_mask) in enumerate(train_loader):
+
+    # 使用tqdm创建进度条
+    pbar = tqdm(enumerate(train_loader), total=len(train_loader),
+                desc=f'Epoch {epoch + 1}/{args.epochs}',
+                disable=ddp and dist.get_rank() != 0)  # 在DDP模式下只显示主进程的进度条
+
+    for step, (X, Y, loss_mask) in pbar:
         X = X.to(args.device)
         Y = Y.to(args.device)
         loss_mask = loss_mask.to(args.device)
@@ -63,6 +70,12 @@ def train_epoch(epoch, wandb):
             scaler.update()
 
             optimizer.zero_grad(set_to_none=True)
+
+        # 更新进度条信息
+        pbar.set_postfix({
+            'loss': f'{loss.item() * args.accumulation_steps:.3f}',
+            'lr': f'{optimizer.param_groups[-1]["lr"]:.2e}'
+        })
 
         if step % args.log_interval == 0:
             spend_time = time.time() - start_time
@@ -94,10 +107,13 @@ def train_epoch(epoch, wandb):
             torch.save(state_dict, ckp)
             model.train()
 
+    pbar.close()
+
 
 def init_model(lm_config):
-    tokenizer = AutoTokenizer.from_pretrained('../../model/minimind_tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config).to(args.device)
+    Logger(f'当前训练设备: {args.device}')
     Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     return model, tokenizer
 
@@ -114,6 +130,14 @@ def init_distributed_mode():
     torch.cuda.set_device(DEVICE)
 
 
+def get_default_device():
+    if torch.cuda.is_available():
+        return "cuda:0"
+    elif torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 # torchrun --nproc_per_node 2 1-pretrain.py
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MiniMind Pretraining")
@@ -122,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=5e-4)
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", type=str, default=get_default_device())
     parser.add_argument("--dtype", type=str, default="bfloat16")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="MiniMind-Pretrain")
@@ -138,7 +162,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_layers', default=8, type=int)
     parser.add_argument('--max_seq_len', default=512, type=int)
     parser.add_argument('--use_moe', default=False, type=bool)
-    parser.add_argument("--data_path", type=str, default="../../dataset/pretrain_hq.jsonl")
+    parser.add_argument("--data_path", type=str, default="./dataset/pretrain_hq.jsonl")
     args = parser.parse_args()
 
     lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe)
@@ -147,14 +171,15 @@ if __name__ == "__main__":
     os.makedirs(args.out_dir, exist_ok=True)
     tokens_per_iter = args.batch_size * lm_config.max_seq_len
     torch.manual_seed(1337)
-    device_type = "cuda" if "cuda" in args.device else "cpu"
+    device_type = "cuda" if "cuda" in args.device else "mps" if "mps" in args.device else "cpu"
 
     args.wandb_run_name = f"MiniMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
 
-    ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast()
+    ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast() if device_type == "cuda" else nullcontext()
 
     ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-    ddp_local_rank, DEVICE = 0, "cuda:0"
+    ddp_local_rank = 0
+    DEVICE = get_default_device()
 
     if ddp:
         init_distributed_mode()
