@@ -32,6 +32,42 @@ def get_lr(current_step, total_steps, lr):
     return lr / 10 + 0.5 * lr * (1 + math.cos(math.pi * current_step / total_steps))
 
 
+def save_checkpoint(epoch, model, optimizer, scaler, loss, checkpoint_path):
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        model_state_dict = model.module.state_dict()
+    else:
+        model_state_dict = model.state_dict()
+
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model_state_dict,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scaler_state_dict': scaler.state_dict() if scaler is not None else None,
+        'loss': loss,
+        'args': args,
+        'lm_config': lm_config
+    }
+    torch.save(checkpoint, checkpoint_path)
+    Logger(f'保存检查点到: {checkpoint_path}')
+
+
+def load_checkpoint(checkpoint_path, model, optimizer, scaler):
+    Logger(f'加载检查点: {checkpoint_path}')
+    checkpoint = torch.load(checkpoint_path, map_location=args.device)
+
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        model.module.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    if scaler is not None and checkpoint['scaler_state_dict'] is not None:
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+
+    start_epoch = checkpoint['epoch'] + 1
+    return start_epoch
+
+
 def train_epoch(epoch, wandb):
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
@@ -94,24 +130,16 @@ def train_epoch(epoch, wandb):
                            "lr": optimizer.param_groups[-1]['lr'],
                            "epoch_Time": spend_time / (step + 1) * iter_per_epoch // 60 - spend_time // 60})
 
-        if (step + 1) % args.save_interval == 0 and (not ddp or dist.get_rank() == 0):
-            model.eval()
-            moe_path = '_moe' if lm_config.use_moe else ''
-            ckp = f'{args.save_dir}/pretrain_{lm_config.dim}{moe_path}.pth'
-
-            if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-                state_dict = model.module.state_dict()
-            else:
-                state_dict = model.state_dict()
-
-            torch.save(state_dict, ckp)
-            model.train()
+    # 每个epoch结束后保存检查点
+    if not ddp or dist.get_rank() == 0:
+        checkpoint_path = os.path.join(args.save_dir, f'checkpoint_epoch_{epoch}.pt')
+        save_checkpoint(epoch, model, optimizer, scaler, loss.item(), checkpoint_path)
 
     pbar.close()
 
 
 def init_model(lm_config):
-    tokenizer = AutoTokenizer.from_pretrained('../../model/minimind_tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config).to(args.device)
     Logger(f'当前训练设备: {args.device}')
     Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
@@ -156,13 +184,13 @@ if __name__ == "__main__":
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--warmup_iters", type=int, default=0)
     parser.add_argument("--log_interval", type=int, default=100)
-    parser.add_argument("--save_interval", type=int, default=100)
     parser.add_argument('--local_rank', type=int, default=-1)
     parser.add_argument('--dim', default=512, type=int)
     parser.add_argument('--n_layers', default=8, type=int)
     parser.add_argument('--max_seq_len', default=512, type=int)
     parser.add_argument('--use_moe', default=False, type=bool)
-    parser.add_argument("--data_path", type=str, default="../../dataset/pretrain_hq.jsonl")
+    parser.add_argument("--data_path", type=str, default="./dataset/pretrain_hq.jsonl")
+    parser.add_argument("--resume", type=str, default="", help="恢复训练的检查点路径")
     args = parser.parse_args()
 
     lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe)
@@ -208,10 +236,15 @@ if __name__ == "__main__":
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
+    start_epoch = 0
+    if args.resume:
+        start_epoch = load_checkpoint(args.resume, model, optimizer, scaler)
+        Logger(f'从epoch {start_epoch}继续训练')
+
     if ddp:
         model._ddp_params_and_buffers_to_ignore = {"pos_cis"}
         model = DistributedDataParallel(model, device_ids=[ddp_local_rank])
 
     iter_per_epoch = len(train_loader)
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         train_epoch(epoch, wandb)
