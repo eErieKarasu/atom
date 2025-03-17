@@ -13,11 +13,16 @@ warnings.filterwarnings('ignore')
 
 
 def init_model(args):
-    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained('../../model/minimind_tokenizer')
     if args.load == 0:
-        moe_path = '_moe' if args.use_moe else ''
-        modes = {0: 'pretrain', 1: 'full_sft', 2: 'rlhf', 3: 'reason'}
-        ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
+        # 如果指定了自定义模型路径，则直接加载
+        if args.model_path:
+            ckp = args.model_path
+        else:
+            # 原有的模型加载逻辑
+            moe_path = '_moe' if args.use_moe else ''
+            modes = {0: 'pretrain', 1: 'full_sft', 2: 'rlhf', 3: 'reason'}
+            ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
 
         model = MiniMindLM(LMConfig(
             dim=args.dim,
@@ -26,6 +31,7 @@ def init_model(args):
             use_moe=args.use_moe
         ))
 
+        # 加载模型权重，支持.pth和.pt后缀
         state_dict = torch.load(ckp, map_location=args.device)
         model.load_state_dict({k: v for k, v in state_dict.items() if 'mask' not in k}, strict=True)
 
@@ -62,7 +68,7 @@ def get_prompt_datas(args):
                 '我咳嗽已经持续了两周，需要去医院检查吗？',
                 '详细的介绍光速的物理概念。',
                 '推荐一些杭州的特色美食吧。',
-                '请为我讲解“大语言模型”这个概念。',
+                '请为我讲解"大语言模型"这个概念。',
                 '如何理解ChatGPT？',
                 'Introduce the history of the United States, please.'
             ]
@@ -104,7 +110,7 @@ def setup_seed(seed):
 def main():
     parser = argparse.ArgumentParser(description="Chat with MiniMind")
     parser.add_argument('--lora_name', default='None', type=str)
-    parser.add_argument('--out_dir', default='out', type=str)
+    parser.add_argument('--out_dir', default='../train/out', type=str)
     parser.add_argument('--temperature', default=0.85, type=float)
     parser.add_argument('--top_p', default=0.85, type=float)
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
@@ -124,6 +130,8 @@ def main():
     parser.add_argument('--load', default=0, type=int, help="0: 原生torch权重，1: transformers加载")
     parser.add_argument('--model_mode', default=1, type=int,
                         help="0: 预训练模型，1: SFT-Chat模型，2: RLHF-Chat模型，3: Reason模型")
+    parser.add_argument('--model_path', default='', type=str, 
+                        help="自定义模型路径，支持.pth和.pt格式，优先级高于自动生成的路径")
     args = parser.parse_args()
 
     model, tokenizer = init_model(args)
