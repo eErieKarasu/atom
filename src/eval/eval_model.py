@@ -19,7 +19,7 @@ def init_model(args):
         if args.model_path:
             ckp = args.model_path
         else:
-            # 原有的模型加载逻辑
+            # 原有的模型加载逻辑.
             moe_path = '_moe' if args.use_moe else ''
             modes = {0: 'pretrain', 1: 'full_sft', 2: 'rlhf', 3: 'reason'}
             ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
