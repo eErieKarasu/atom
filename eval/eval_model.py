@@ -12,6 +12,13 @@ import glob
 
 warnings.filterwarnings('ignore')
 
+def get_default_device():
+    if torch.cuda.is_available():
+        return "cuda:0"
+    elif torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
 
 def init_model(args):
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
@@ -72,6 +79,7 @@ def init_model(args):
         transformers_model_path = './MiniMind2'
         tokenizer = AutoTokenizer.from_pretrained(transformers_model_path)
         model = AutoModelForCausalLM.from_pretrained(transformers_model_path, trust_remote_code=True)
+    print(f'当前使用设备: {args.device}')
     print(f'MiniMind模型参数量: {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.2f}M(illion)')
     return model.eval().to(args.device), tokenizer
 
@@ -143,7 +151,7 @@ def main():
     parser.add_argument('--out_dir', default='./out', type=str)
     parser.add_argument('--temperature', default=0.85, type=float)
     parser.add_argument('--top_p', default=0.85, type=float)
-    parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
+    parser.add_argument('--device', default=get_default_device(), type=str)
     # 此处max_seq_len（最大允许输入长度）并不意味模型具有对应的长文本的性能，仅防止QA出现被截断的问题
     # MiniMind2-moe (145M)：(dim=640, n_layers=8, use_moe=True)
     # MiniMind2-Small (26M)：(dim=512, n_layers=8)
@@ -170,6 +178,7 @@ def main():
 
     prompts = get_prompt_datas(args)
     test_mode = int(input('[0] 自动测试\n[1] 手动输入\n'))
+
     messages = []
     for idx, prompt in enumerate(prompts if test_mode == 0 else iter(lambda: input('👶: '), '')):
         setup_seed(random.randint(0, 2048))
