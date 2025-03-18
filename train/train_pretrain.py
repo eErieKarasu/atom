@@ -265,15 +265,15 @@ if __name__ == "__main__":
 
     # 保存最终模型
     if not ddp or dist.get_rank() == 0:
-        # 保存checkpoint格式
-        checkpoint_path = os.path.join(args.save_dir, f'final_checkpoint.pt')
-        save_checkpoint(args.epochs-1, model, optimizer, scaler, 0.0, checkpoint_path)
+        # 保存最后一个epoch的checkpoint
+        last_epoch = args.epochs - 1
+        checkpoint_path = os.path.join(args.save_dir, f'checkpoint_epoch_{last_epoch}.pt')
+        save_checkpoint(last_epoch, model, optimizer, scaler, 0.0, checkpoint_path)
         
-        # 保存仅包含模型权重的格式，方便评估脚本加载
+        # 保存仅包含模型权重的标准格式，方便评估脚本加载
         moe_path = '_moe' if args.use_moe else ''
         model_path = os.path.join(args.save_dir, f'pretrain_{args.dim}{moe_path}.pth')
         save_final_model(model, lm_config, model_path)
         
-        # 同时保存适用于评估脚本的final_model.pt
-        final_model_path = os.path.join(args.save_dir, 'final_model.pt')
-        save_final_model(model, lm_config, final_model_path)
+        Logger(f'训练完成。模型已保存为:\n1. 检查点格式: {checkpoint_path} (可用于恢复训练)\n2. 评估格式: {model_path} (用于模型评估)')
+        Logger(f'如需恢复训练，请使用命令: python train_pretrain.py --resume {checkpoint_path}')

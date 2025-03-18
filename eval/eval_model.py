@@ -8,6 +8,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from model.model import MiniMindLM
 from model.LMConfig import LMConfig
 from model.model_lora import *
+import glob
 
 warnings.filterwarnings('ignore')
 
@@ -23,12 +24,25 @@ def init_model(args):
             moe_path = '_moe' if args.use_moe else ''
             modes = {0: 'pretrain', 1: 'full_sft', 2: 'rlhf', 3: 'reason'}
             
-            # 检查是否是训练脚本生成的checkpoint文件格式
+            # 检查是否需要加载检查点文件
             if args.checkpoint_epoch >= 0:
-                ckp = f'./{args.out_dir}/checkpoint_epoch_{args.checkpoint_epoch}.pt'
-            elif args.use_final_model:
-                ckp = f'./{args.out_dir}/final_model.pt'
+                if args.checkpoint_epoch == 999:  # 特殊值999表示使用最后一个检查点
+                    # 寻找最后一个检查点
+                    checkpoint_files = glob.glob(f'./{args.out_dir}/checkpoint_epoch_*.pt')
+                    if checkpoint_files:
+                        # 按照编号排序并获取最后一个
+                        checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                        ckp = checkpoint_files[-1]
+                        print(f'自动加载最后一个检查点: {ckp}')
+                    else:
+                        # 如果没有找到检查点，使用标准模型文件
+                        ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
+                        print(f'未找到检查点文件，使用标准模型: {ckp}')
+                else:
+                    # 使用指定epoch的检查点
+                    ckp = f'./{args.out_dir}/checkpoint_epoch_{args.checkpoint_epoch}.pt'
             else:
+                # 使用标准模型文件
                 ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
 
         model = MiniMindLM(LMConfig(
@@ -41,12 +55,12 @@ def init_model(args):
         # 加载模型权重
         checkpoint = torch.load(ckp, map_location=args.device)
         
-        # 处理两种可能的权重格式：直接state_dict或者包含在'model_state_dict'中的格式
+        # 处理两种可能的权重格式
         if 'model_state_dict' in checkpoint:
-            # train_pretrain.py的保存格式
+            # 检查点格式（包含完整训练状态）
             state_dict = checkpoint['model_state_dict']
         else:
-            # 直接保存的state_dict
+            # 标准权重格式（仅包含模型权重）
             state_dict = checkpoint
             
         model.load_state_dict({k: v for k, v in state_dict.items() if 'mask' not in k}, strict=True)
@@ -149,9 +163,7 @@ def main():
     parser.add_argument('--model_path', default='', type=str, 
                         help="自定义模型路径，支持.pth和.pt格式，优先级高于自动生成的路径")
     parser.add_argument('--checkpoint_epoch', default=-1, type=int, 
-                        help="训练检查点的epoch编号，用于加载train_pretrain.py训练的模型，-1表示不使用检查点")
-    parser.add_argument('--use_final_model', action='store_true',
-                        help="是否使用训练脚本保存的最终模型final_model.pt")
+                        help="训练检查点的epoch编号，用于加载train_pretrain.py训练的模型，-1表示不使用检查点，999表示自动加载最后一个检查点")
     args = parser.parse_args()
 
     model, tokenizer = init_model(args)
