@@ -53,7 +53,7 @@ def init_model(args):
         ))
 
         # 加载模型权重
-        checkpoint = torch.load(ckp, map_location=args.device)
+        checkpoint = torch.load(ckp, map_location=args.device, weights_only=False)
         
         # 处理两种可能的权重格式
         if 'model_state_dict' in checkpoint:
@@ -140,7 +140,7 @@ def setup_seed(seed):
 def main():
     parser = argparse.ArgumentParser(description="Chat with MiniMind")
     parser.add_argument('--lora_name', default='None', type=str)
-    parser.add_argument('--out_dir', default='../train/out', type=str)
+    parser.add_argument('--out_dir', default='./out', type=str)
     parser.add_argument('--temperature', default=0.85, type=float)
     parser.add_argument('--top_p', default=0.85, type=float)
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
