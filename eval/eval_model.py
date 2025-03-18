@@ -13,7 +13,7 @@ warnings.filterwarnings('ignore')
 
 
 def init_model(args):
-    tokenizer = AutoTokenizer.from_pretrained('../../model/minimind_tokenizer')
+    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     if args.load == 0:
         # 如果指定了自定义模型路径，则直接加载
         if args.model_path:
