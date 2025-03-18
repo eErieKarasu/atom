@@ -149,18 +149,6 @@ def train_epoch(epoch, wandb):
                            "lr": optimizer.param_groups[-1]['lr'],
                            "epoch_Time": spend_time / (step + 1) * iter_per_epoch // 60 - spend_time // 60})
 
-        if (step + 1) % args.save_interval == 0 and (not ddp or dist.get_rank() == 0):
-            # 保存检查点
-            checkpoint_path = os.path.join(args.save_dir, f'checkpoint_sft_epoch_{epoch}_step_{step}.pt')
-            save_checkpoint(epoch, model, optimizer, scaler, loss.item(), checkpoint_path)
-            
-            # 同时保存只有权重的模型文件
-            model.eval()
-            moe_path = '_moe' if lm_config.use_moe else ''
-            model_path = f'{args.save_dir}/full_sft_{lm_config.dim}{moe_path}.pth'
-            save_model_weights(model, model_path)
-            model.train()
-    
     # 每个epoch结束后保存一次检查点
     if not ddp or dist.get_rank() == 0:
         checkpoint_path = os.path.join(args.save_dir, f'checkpoint_sft_epoch_{epoch}.pt')
@@ -216,7 +204,6 @@ if __name__ == "__main__":
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--warmup_iters", type=int, default=0)
     parser.add_argument("--log_interval", type=int, default=100)
-    parser.add_argument("--save_interval", type=int, default=100)
     parser.add_argument('--local_rank', type=int, default=-1)
     parser.add_argument('--dim', default=512, type=int)
     parser.add_argument('--n_layers', default=8, type=int)
