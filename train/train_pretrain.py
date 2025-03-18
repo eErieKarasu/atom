@@ -166,6 +166,20 @@ def get_default_device():
     return "cpu"
 
 
+def save_final_model(model, config, save_path):
+    """保存最终模型为标准格式，方便评估脚本加载"""
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        model_state_dict = model.module.state_dict()
+    else:
+        model_state_dict = model.state_dict()
+    
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    
+    torch.save(model_state_dict, save_path)
+    Logger(f'保存最终模型到: {save_path}')
+
+
 # torchrun --nproc_per_node 2 1-pretrain.py
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MiniMind Pretraining")
@@ -248,3 +262,18 @@ if __name__ == "__main__":
     iter_per_epoch = len(train_loader)
     for epoch in range(start_epoch, args.epochs):
         train_epoch(epoch, wandb)
+
+    # 保存最终模型
+    if not ddp or dist.get_rank() == 0:
+        # 保存checkpoint格式
+        checkpoint_path = os.path.join(args.save_dir, f'final_checkpoint.pt')
+        save_checkpoint(args.epochs-1, model, optimizer, scaler, 0.0, checkpoint_path)
+        
+        # 保存仅包含模型权重的格式，方便评估脚本加载
+        moe_path = '_moe' if args.use_moe else ''
+        model_path = os.path.join(args.save_dir, f'pretrain_{args.dim}{moe_path}.pth')
+        save_final_model(model, lm_config, model_path)
+        
+        # 同时保存适用于评估脚本的final_model.pt
+        final_model_path = os.path.join(args.save_dir, 'final_model.pt')
+        save_final_model(model, lm_config, final_model_path)

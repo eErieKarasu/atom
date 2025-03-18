@@ -19,10 +19,17 @@ def init_model(args):
         if args.model_path:
             ckp = args.model_path
         else:
-            # 原有的模型加载逻辑.
+            # 原有的模型加载逻辑
             moe_path = '_moe' if args.use_moe else ''
             modes = {0: 'pretrain', 1: 'full_sft', 2: 'rlhf', 3: 'reason'}
-            ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
+            
+            # 检查是否是训练脚本生成的checkpoint文件格式
+            if args.checkpoint_epoch >= 0:
+                ckp = f'./{args.out_dir}/checkpoint_epoch_{args.checkpoint_epoch}.pt'
+            elif args.use_final_model:
+                ckp = f'./{args.out_dir}/final_model.pt'
+            else:
+                ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
 
         model = MiniMindLM(LMConfig(
             dim=args.dim,
@@ -31,8 +38,17 @@ def init_model(args):
             use_moe=args.use_moe
         ))
 
-        # 加载模型权重，支持.pth和.pt后缀
-        state_dict = torch.load(ckp, map_location=args.device)
+        # 加载模型权重
+        checkpoint = torch.load(ckp, map_location=args.device)
+        
+        # 处理两种可能的权重格式：直接state_dict或者包含在'model_state_dict'中的格式
+        if 'model_state_dict' in checkpoint:
+            # train_pretrain.py的保存格式
+            state_dict = checkpoint['model_state_dict']
+        else:
+            # 直接保存的state_dict
+            state_dict = checkpoint
+            
         model.load_state_dict({k: v for k, v in state_dict.items() if 'mask' not in k}, strict=True)
 
         if args.lora_name != 'None':
@@ -132,6 +148,10 @@ def main():
                         help="0: 预训练模型，1: SFT-Chat模型，2: RLHF-Chat模型，3: Reason模型")
     parser.add_argument('--model_path', default='', type=str, 
                         help="自定义模型路径，支持.pth和.pt格式，优先级高于自动生成的路径")
+    parser.add_argument('--checkpoint_epoch', default=-1, type=int, 
+                        help="训练检查点的epoch编号，用于加载train_pretrain.py训练的模型，-1表示不使用检查点")
+    parser.add_argument('--use_final_model', action='store_true',
+                        help="是否使用训练脚本保存的最终模型final_model.pt")
     args = parser.parse_args()
 
     model, tokenizer = init_model(args)
