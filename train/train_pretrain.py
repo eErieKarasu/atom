@@ -68,7 +68,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, scaler):
     return start_epoch
 
 
-def train_epoch(epoch, wandb):
+def train_epoch(epoch):
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
 
@@ -125,11 +125,6 @@ def train_epoch(epoch, wandb):
                     optimizer.param_groups[-1]['lr'],
                     spend_time / (step + 1) * iter_per_epoch // 60 - spend_time // 60))
 
-            if (wandb is not None) and (not ddp or dist.get_rank() == 0):
-                wandb.log({"loss": loss.item() * args.accumulation_steps,
-                           "lr": optimizer.param_groups[-1]['lr'],
-                           "epoch_Time": spend_time / (step + 1) * iter_per_epoch // 60 - spend_time // 60})
-
     # 每个epoch结束后保存检查点
     if not ddp or dist.get_rank() == 0:
         checkpoint_path = os.path.join(args.save_dir, f'checkpoint_epoch_{epoch}.pt')
@@ -182,23 +177,17 @@ def save_final_model(model, config, save_path):
 
 # torchrun --nproc_per_node 2 1-pretrain.py
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MiniMind Pretraining")
+    parser = argparse.ArgumentParser(description="Atom Pretraining")
     parser.add_argument("--out_dir", type=str, default="out")
-    # 若要以最快速度实现zero则epochs设置为1轮；否则应当利用有限的数据训练2~6个epochs。
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=5e-4)
     parser.add_argument("--device", type=str, default=get_default_device())
     parser.add_argument("--dtype", type=str, default="bfloat16")
-    parser.add_argument("--use_wandb", action="store_true")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-Pretrain")
     parser.add_argument("--num_workers", type=int, default=1)
-    parser.add_argument("--ddp", action="store_true")
     parser.add_argument("--accumulation_steps", type=int, default=8)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--warmup_iters", type=int, default=0)
-    parser.add_argument("--log_interval", type=int, default=100)
-    parser.add_argument('--local_rank', type=int, default=-1)
+    parser.add_argument("--log_interval", type=int, default=1000)
     parser.add_argument('--dim', default=512, type=int)
     parser.add_argument('--n_layers', default=8, type=int)
     parser.add_argument('--max_seq_len', default=512, type=int)
@@ -215,8 +204,6 @@ if __name__ == "__main__":
     torch.manual_seed(1337)
     device_type = "cuda" if "cuda" in args.device else "mps" if "mps" in args.device else "cpu"
 
-    args.wandb_run_name = f"MiniMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
-
     ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast() if device_type == "cuda" else nullcontext()
 
     ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
@@ -226,13 +213,6 @@ if __name__ == "__main__":
     if ddp:
         init_distributed_mode()
         args.device = torch.device(DEVICE)
-
-    if args.use_wandb and (not ddp or ddp_local_rank == 0):
-        import wandb
-
-        wandb.init(project=args.wandb_project, name=args.wandb_run_name)
-    else:
-        wandb = None
 
     model, tokenizer = init_model(lm_config)
     train_ds = PretrainDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
@@ -261,7 +241,7 @@ if __name__ == "__main__":
 
     iter_per_epoch = len(train_loader)
     for epoch in range(start_epoch, args.epochs):
-        train_epoch(epoch, wandb)
+        train_epoch(epoch)
 
     # 保存最终模型
     if not ddp or dist.get_rank() == 0:
